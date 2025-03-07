@@ -71,10 +71,45 @@ const ExperienceForm = (props: { handleNext: () => void }) => {
   const handEditor = (value: string, name: string, index: number) => {
     setExperienceList((prevState) => {
       const newExperienceList = [...prevState];
-      newExperienceList[index] = {
-        ...newExperienceList[index],
-        [name]: value,
-      };
+
+      // If handling workSummary, ensure it's properly formatted
+      if (name === "workSummary") {
+        // Ensure value is a string
+        let formattedValue = value || "";
+
+        // Only proceed with string formatting if we have a string
+        if (typeof formattedValue === 'string') {
+          // Check if the value is HTML (contains tags) and not already formatted
+          const isHTML = formattedValue.includes('<') && formattedValue.includes('>');
+
+          // If it's HTML content but not properly wrapped in ul/li, format it
+          if (isHTML && !formattedValue.trim().startsWith('<ul>')) {
+            // If the content has bullet points but isn't properly formatted as HTML list
+            if (formattedValue.includes('•') || formattedValue.includes('- ')) {
+              // Convert bullet points to proper HTML list
+              const items = formattedValue.split(/[\n\r]+/).filter(item => item.trim());
+              const listItems = items.map(item => {
+                // Ensure item is a string before calling replace
+                const itemStr = String(item);
+                const trimmed = itemStr.trim().replace(/^[•\-]\s*/, '');
+                return `<li>${trimmed}</li>`;
+              }).join('');
+              formattedValue = `<ul>${listItems}</ul>`;
+            }
+          }
+        }
+
+        newExperienceList[index] = {
+          ...newExperienceList[index],
+          [name]: formattedValue,
+        };
+      } else {
+        newExperienceList[index] = {
+          ...newExperienceList[index],
+          [name]: value,
+        };
+      }
+
       return newExperienceList;
     });
   };
@@ -220,10 +255,10 @@ const ExperienceForm = (props: { handleNext: () => void }) => {
                 <div className="col-span-2 mt-1">
                   {/* {Work Summary} */}
                   <RichTextEditor
-                    jobTitle={item.title}
-                    initialValue={item.workSummary || ""}
+                    jobTitle={item.title || ''}
+                    initialValue={item.workSummary || ''}
                     onEditorChange={(value: string) =>
-                      handEditor(value, "workSummary", index)
+                      handEditor(value || '', "workSummary", index)
                     }
                   />
                 </div>

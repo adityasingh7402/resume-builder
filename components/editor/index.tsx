@@ -72,7 +72,7 @@ const RichTextEditor = (props: {
       justify-between my-2"
       >
         <Label>Work Summary</Label>
-        <Button
+        {/* <Button
           variant="outline"
           type="button"
           className="gap-1"
@@ -84,7 +84,7 @@ const RichTextEditor = (props: {
             Generate with AI
           </>
           {loading && <Loader size="13px" className="animate-spin" />}
-        </Button>
+        </Button> */}
       </div>
 
       <EditorProvider>

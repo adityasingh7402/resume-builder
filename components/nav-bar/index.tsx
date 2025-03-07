@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 const NavBar = () => {
   return (
     <div className="shadow-sm w-full sticky top-0  bg-white dark:bg-gray-900 z-[9999]">
-      <div className="w-full flex items-center justify-center h-auto bg-black">
+      {/* <div className="w-full flex items-center justify-center h-auto bg-black">
         <div className="max-w-6xl mx-auto py-2">
           <p className="text-white text-sm">
             <b>Subcribe to the channel 🙏</b>! Boost your resume with CVbuild.ai
@@ -21,7 +21,7 @@ const NavBar = () => {
             </a>
           </p>
         </div>
-      </div>
+      </div> */}
       <div className="w-full mx-auto max-w-7xl p-3 px-5 flex items-center justify-between ">
         <div className="flex items-center flex-1 gap-9">
           <div>
@@ -29,7 +29,7 @@ const NavBar = () => {
           </div>
 
           <div className="hidden lg:flex">
-            <ul className="flex items-center gap-5 text-[14px] font-medium text-black dark:text-white">
+            {/* <ul className="flex items-center gap-5 text-[14px] font-medium text-black dark:text-white">
               <li>
                 <Link href="#">AI Features</Link>
               </li>
@@ -39,7 +39,7 @@ const NavBar = () => {
               <li>
                 <Link href="#">Resources</Link>
               </li>
-            </ul>
+            </ul> */}
           </div>
         </div>
         <div className="flex items-center gap-4">

@@ -13,6 +13,8 @@ import { Loader, Sparkles } from "lucide-react";
 import React, { useCallback, useState } from "react";
 
 interface GeneratesSummaryType {
+  map: any;
+  summaries: GeneratesSummaryType | null;
   fresher: string;
   mid: string;
   experienced: string;
@@ -144,31 +146,26 @@ const SummaryForm = (props: { handleNext: () => void }) => {
             onChange={handleChange}
           />
 
-          {aiGeneratedSummary && (
+          {aiGeneratedSummary && aiGeneratedSummary.summaries && (
             <div>
               <h5 className="font-semibold text-[15px] my-4">Suggestions</h5>
-              {Object?.entries(aiGeneratedSummary)?.map(
-                ([experienceType, summary], index) => (
-                  <Card
-                    role="button"
-                    key={index}
-                    className="my-4 bg-primary/5 shadow-none
-                            border-primary/30
-                          "
-                    onClick={() => handleSelect(summary)}
-                  >
-                    <CardHeader className="py-2">
-                      <CardTitle className="font-semibold text-md">
-                        {experienceType?.charAt(0)?.toUpperCase() +
-                          experienceType?.slice(1)}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-sm">
-                      <p>{summary}</p>
-                    </CardContent>
-                  </Card>
-                )
-              )}
+              {aiGeneratedSummary.summaries.map((item: { summary: string | number | bigint | boolean | React.ReactElement<any, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | Promise<React.AwaitedReactNode> | null | undefined; experienceLevel: string | number | bigint | boolean | React.ReactElement<any, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | React.ReactPortal | Promise<React.AwaitedReactNode> | null | undefined; }, index: React.Key | null | undefined) => (
+                <Card
+                  role="button"
+                  key={index}
+                  className="my-4 bg-primary/5 shadow-none border-primary/30"
+                  onClick={() => handleSelect(item.summary)}
+                >
+                  <CardHeader className="py-2">
+                    <CardTitle className="font-semibold text-md">
+                      {item.experienceLevel}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm">
+                    <p>{item.summary}</p>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           )}
 

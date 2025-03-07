@@ -1,26 +1,73 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { and, desc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import {
   createDocumentTableSchema,
-  DocumentSchema,
-  documentTable,
-  updateCombinedSchema,
-  UpdateDocumentSchema,
 } from "@/db/schema/document";
 import { getAuthUser } from "@/lib/kinde";
 import { generateDocUUID } from "@/lib/helper";
-import { db } from "@/db";
-import {
-  educationTable,
-  experienceTable,
-  personalInfoTable,
-  skillsTable,
-} from "@/db/schema";
+
+// Define a proper type for the server storage
+interface StorageData {
+  [key: string]: any;
+}
+
+// LocalStorage helper functions - defined on the server-side but only execute on client
+const getLocalStorage = (key: string) => {
+  try {
+    if (typeof window === 'undefined') return null;
+    const data = window.localStorage.getItem(key);
+    return data ? JSON.parse(data) : null;
+  } catch (error) {
+    console.error(`Error reading from localStorage [${key}]:`, error);
+    return null;
+  }
+};
+
+const setLocalStorage = (key: string, value: any) => {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.error(`Error writing to localStorage [${key}]:`, error);
+  }
+};
+
+// Server-side localStorage mock for SSR compatibility
+const serverStorage: StorageData = {};
+
+// Universal storage functions that work in both environments
+const getStorage = (key: string) => {
+  if (typeof window !== 'undefined') {
+    return getLocalStorage(key);
+  } else {
+    return serverStorage[key] || null;
+  }
+};
+
+const setStorage = (key: string, value: any) => {
+  if (typeof window !== 'undefined') {
+    setLocalStorage(key, value);
+  } else {
+    serverStorage[key] = value;
+  }
+};
+
+// Initialize storage with middleware
+const initStorage = async (c: any, next: () => any) => {
+  const keys = ['documents', 'personalInfo', 'experience', 'education', 'skills'];
+  
+  keys.forEach(key => {
+    if (!getStorage(key)) {
+      setStorage(key, []);
+    }
+  });
+  
+  await next();
+};
 
 const documentRoute = new Hono()
+  .use('*', initStorage)
   .post(
     "/create",
     zValidator("json", createDocumentTableSchema),
@@ -28,37 +75,44 @@ const documentRoute = new Hono()
     async (c) => {
       try {
         const user = c.get("user");
-        const { title } = c.req.valid("json") as DocumentSchema;
+        const { title } = c.req.valid("json");
         const userId = user.id;
-        const authorName = `${user.given_name} ${user?.family_name}`;
-        const authorEmail = user.email as string;
+        const authorName = `${user.given_name} ${user?.family_name || ''}`;
+        const authorEmail = user.email || '';
         const documentId = generateDocUUID();
+        const timestamp = new Date().toISOString();
 
         const newDoc = {
+          id: Date.now(), // This is fine as Date.now() returns a number
           title: title,
           userId: userId,
           documentId: documentId,
           authorName: authorName,
           authorEmail: authorEmail,
+          status: "private",
+          createdAt: timestamp,
+          updatedAt: timestamp
         };
 
-        const [data] = await db
-          .insert(documentTable)
-          .values(newDoc)
-          .returning();
+        // Save to storage
+        const documents = getStorage('documents') || [];
+        documents.push(newDoc);
+        setStorage('documents', documents);
+
         return c.json(
           {
             success: "ok",
-            data,
+            data: newDoc,
           },
           { status: 200 }
         );
       } catch (error) {
+        console.error("Create document error:", error);
         return c.json(
           {
             success: false,
             message: "Failed to create document",
-            error: error,
+            error: String(error),
           },
           500
         );
@@ -73,184 +127,153 @@ const documentRoute = new Hono()
         documentId: z.string(),
       })
     ),
-    zValidator("json", updateCombinedSchema),
     getAuthUser,
     async (c) => {
       try {
         const user = c.get("user");
         const { documentId } = c.req.valid("param");
-
-        const {
-          title,
-          status,
-          summary,
-          thumbnail,
-          themeColor,
-          currentPosition,
-          personalInfo,
-          experience,
-          education,
-          skills,
-        } = c.req.valid("json");
         const userId = user.id;
+        const updateData = await c.req.json();
 
         if (!documentId) {
           return c.json({ error: "DocumentId is required" }, 400);
         }
 
-        await db.transaction(async (trx) => {
-          const [existingDocument] = await trx
-            .select()
-            .from(documentTable)
-            .where(
-              and(
-                eq(documentTable.documentId, documentId),
-                eq(documentTable.userId, userId)
-              )
-            );
+        // Get all data from storage
+        const documents = getStorage('documents') || [];
+        let personalInfoItems = getStorage('personalInfo') || [];
+        let experienceItems = getStorage('experience') || [];
+        let educationItems = getStorage('education') || [];
+        let skillsItems = getStorage('skills') || [];
 
-          if (!existingDocument) {
-            return c.json({ error: "Document not found" }, 404);
+        // Find the document
+        const documentIndex = documents.findIndex(
+          (doc: { documentId: string; userId: string; }) => doc.documentId === documentId && doc.userId === userId
+        );
+
+        if (documentIndex === -1) {
+          return c.json({ error: "Document not found" }, 404);
+        }
+
+        const existingDocument = documents[documentIndex];
+
+        // Update document basic info
+        const { title, thumbnail, summary, themeColor, status, currentPosition, 
+                personalInfo, experience, education, skills } = updateData;
+                
+        if (title) documents[documentIndex].title = title;
+        if (thumbnail) documents[documentIndex].thumbnail = thumbnail;
+        if (summary) documents[documentIndex].summary = summary;
+        if (themeColor) documents[documentIndex].themeColor = themeColor;
+        if (status) documents[documentIndex].status = status;
+        if (currentPosition) documents[documentIndex].currentPosition = currentPosition;
+        
+        documents[documentIndex].updatedAt = new Date().toISOString();
+
+        // Update personal info
+        if (personalInfo) {
+          const personalInfoIndex = personalInfoItems.findIndex(
+            (info: { docId: any; }) => info.docId === existingDocument.id
+          );
+
+          if (personalInfoIndex !== -1) {
+            personalInfoItems[personalInfoIndex] = {
+              ...personalInfoItems[personalInfoIndex],
+              ...personalInfo
+            };
+          } else {
+            personalInfoItems.push({
+              id: Date.now(),
+              docId: existingDocument.id,
+              ...personalInfo
+            });
           }
+        }
 
-          const resumeUpdate = {} as UpdateDocumentSchema;
-          if (title) resumeUpdate.title = title;
-          if (thumbnail) resumeUpdate.thumbnail = thumbnail;
-          if (summary) resumeUpdate.summary = summary;
-          if (themeColor) resumeUpdate.themeColor = themeColor;
-          if (status) resumeUpdate.status = status;
-          if (currentPosition)
-            resumeUpdate.currentPosition = currentPosition || 1;
-
-          if (Object.keys(resumeUpdate)?.length > 0) {
-            await trx
-              .update(documentTable)
-              .set(resumeUpdate)
-              .where(
-                and(
-                  eq(documentTable.documentId, documentId),
-                  eq(documentTable.userId, userId)
-                )
-              )
-              .returning();
-          }
-
-          if (personalInfo) {
-            if (!personalInfo?.firstName && !personalInfo?.lastName) {
-              return;
-            }
-            const exists = await trx
-              .select()
-              .from(personalInfoTable)
-              .where(eq(personalInfoTable.docId, existingDocument.id))
-              .limit(1);
-
-            if (exists.length > 0) {
-              await trx
-                .update(personalInfoTable)
-                .set(personalInfo)
-                .where(eq(personalInfoTable.docId, existingDocument.id));
+        // Update experiences
+        if (experience && Array.isArray(experience)) {
+          for (const exp of experience) {
+            const { id, ...data } = exp;
+            
+            if (id !== undefined) {
+              const expIndex = experienceItems.findIndex(
+                (item: { id: any; docId: any; }) => item.id === id && item.docId === existingDocument.id
+              );
+              
+              if (expIndex !== -1) {
+                experienceItems[expIndex] = {
+                  ...experienceItems[expIndex],
+                  ...data
+                };
+              }
             } else {
-              await trx.insert(personalInfoTable).values({
+              experienceItems.push({
+                id: Date.now() + Math.floor(Math.random() * 1000),
                 docId: existingDocument.id,
-                ...personalInfo,
+                ...data
               });
             }
           }
+        }
 
-          if (experience && Array.isArray(experience)) {
-            const existingExperience = await trx
-              .select()
-              .from(experienceTable)
-              .where(eq(experienceTable.docId, existingDocument.id));
-
-            const existingExperienceMap = new Set(
-              existingExperience.map((exp) => exp.id)
-            );
-
-            for (const exp of experience) {
-              const { id, ...data } = exp;
-              if (id !== undefined && existingExperienceMap.has(id)) {
-                await trx
-                  .update(experienceTable)
-                  .set(data)
-                  .where(
-                    and(
-                      eq(experienceTable.docId, existingDocument.id),
-                      eq(experienceTable.id, id)
-                    )
-                  );
-              } else {
-                await trx.insert(experienceTable).values({
-                  docId: existingDocument.id,
-                  ...data,
-                });
+        // Update education
+        if (education && Array.isArray(education)) {
+          for (const edu of education) {
+            const { id, ...data } = edu;
+            
+            if (id !== undefined) {
+              const eduIndex = educationItems.findIndex(
+                (item: { id: any; docId: any; }) => item.id === id && item.docId === existingDocument.id
+              );
+              
+              if (eduIndex !== -1) {
+                educationItems[eduIndex] = {
+                  ...educationItems[eduIndex],
+                  ...data
+                };
               }
+            } else {
+              educationItems.push({
+                id: Date.now() + Math.floor(Math.random() * 1000),
+                docId: existingDocument.id,
+                ...data
+              });
             }
           }
+        }
 
-          if (education && Array.isArray(education)) {
-            const existingEducation = await trx
-              .select()
-              .from(educationTable)
-              .where(eq(educationTable.docId, existingDocument.id));
-
-            const existingEducationMap = new Set(
-              existingEducation.map((edu) => edu.id)
-            );
-
-            for (const edu of education) {
-              const { id, ...data } = edu;
-              if (id !== undefined && existingEducationMap.has(id)) {
-                await trx
-                  .update(educationTable)
-                  .set(data)
-                  .where(
-                    and(
-                      eq(educationTable.docId, existingDocument.id),
-                      eq(educationTable.id, id)
-                    )
-                  );
-              } else {
-                await trx.insert(educationTable).values({
-                  docId: existingDocument.id,
-                  ...data,
-                });
+        // Update skills
+        if (skills && Array.isArray(skills)) {
+          for (const skill of skills) {
+            const { id, ...data } = skill;
+            
+            if (id !== undefined) {
+              const skillIndex = skillsItems.findIndex(
+                (item: { id: any; docId: any; }) => item.id === id && item.docId === existingDocument.id
+              );
+              
+              if (skillIndex !== -1) {
+                skillsItems[skillIndex] = {
+                  ...skillsItems[skillIndex],
+                  ...data
+                };
               }
+            } else {
+              skillsItems.push({
+                id: Date.now() + Math.floor(Math.random() * 1000),
+                docId: existingDocument.id,
+                ...data
+              });
             }
           }
+        }
 
-          if (skills && Array.isArray(skills)) {
-            const existingskills = await trx
-              .select()
-              .from(skillsTable)
-              .where(eq(skillsTable.docId, existingDocument.id));
-
-            const existingSkillsMap = new Set(
-              existingskills.map((skill) => skill.id)
-            );
-
-            for (const skill of skills) {
-              const { id, ...data } = skill;
-              if (id !== undefined && existingSkillsMap.has(id)) {
-                await trx
-                  .update(skillsTable)
-                  .set(data)
-                  .where(
-                    and(
-                      eq(skillsTable.docId, existingDocument.id),
-                      eq(skillsTable.id, id)
-                    )
-                  );
-              } else {
-                await trx.insert(skillsTable).values({
-                  docId: existingDocument.id,
-                  ...data,
-                });
-              }
-            }
-          }
-        });
+        // Save all data back to storage
+        setStorage('documents', documents);
+        setStorage('personalInfo', personalInfoItems);
+        setStorage('experience', experienceItems);
+        setStorage('education', educationItems);
+        setStorage('skills', skillsItems);
 
         return c.json(
           {
@@ -260,11 +283,12 @@ const documentRoute = new Hono()
           { status: 200 }
         );
       } catch (error) {
+        console.error("Update document error:", error);
         return c.json(
           {
             success: false,
             message: "Failed to update document",
-            error: error,
+            error: String(error),
           },
           500
         );
@@ -272,24 +296,16 @@ const documentRoute = new Hono()
     }
   )
   .patch(
-    "/retore/archive",
-    zValidator(
-      "json",
-      z.object({
-        documentId: z.string(),
-        status: z.string(),
-      })
-    ),
+    "/restore/archive",
     getAuthUser,
     async (c) => {
       try {
         const user = c.get("user");
         const userId = user.id;
-
-        const { documentId, status } = c.req.valid("json");
+        const { documentId, status } = await c.req.json();
 
         if (!documentId) {
-          return c.json({ message: "DocumentId must provided" }, 400);
+          return c.json({ message: "DocumentId must be provided" }, 400);
         }
 
         if (status !== "archived") {
@@ -299,68 +315,77 @@ const documentRoute = new Hono()
           );
         }
 
-        const [documentData] = await db
-          .update(documentTable)
-          .set({
-            status: "private",
-          })
-          .where(
-            and(
-              eq(documentTable.userId, userId),
-              eq(documentTable.documentId, documentId),
-              eq(documentTable.status, "archived")
-            )
-          )
-          .returning();
+        // Get documents from storage
+        const documents = getStorage('documents') || [];
+        
+        // Find the document
+        const documentIndex = documents.findIndex(
+          (doc: { documentId: any; userId: string; status: string; }) => doc.documentId === documentId && 
+                doc.userId === userId && 
+                doc.status === "archived"
+        );
 
-        if (!documentData) {
+        if (documentIndex === -1) {
           return c.json({ message: "Document not found" }, 404);
         }
+
+        // Update document status
+        documents[documentIndex].status = "private";
+        documents[documentIndex].updatedAt = new Date().toISOString();
+
+        // Save back to storage
+        setStorage('documents', documents);
 
         return c.json(
           {
             success: "ok",
             message: "Updated successfully",
-            data: documentData,
+            data: documents[documentIndex],
           },
           { status: 200 }
         );
       } catch (error) {
+        console.error("Restore document error:", error);
         return c.json(
           {
             success: false,
-            message: "Failed to retore document",
-            error: error,
+            message: "Failed to restore document",
+            error: String(error),
           },
           500
         );
       }
     }
   )
-  .get("all", getAuthUser, async (c) => {
+  .get("/all", getAuthUser, async (c) => {
     try {
       const user = c.get("user");
       const userId = user.id;
-      const documents = await db
-        .select()
-        .from(documentTable)
-        .orderBy(desc(documentTable.updatedAt))
-        .where(
-          and(
-            eq(documentTable.userId, userId),
-            ne(documentTable.status, "archived")
-          )
-        );
+      
+      // Get documents from storage
+      const documents = getStorage('documents') || [];
+      
+      // Filter documents
+      const filteredDocuments = documents.filter(
+        (doc: { userId: string; status: string; }) => doc.userId === userId && doc.status !== "archived"
+      );
+      
+      // Sort by updatedAt - fixed by converting to Date objects properly
+      filteredDocuments.sort((a: { updatedAt: string }, b: { updatedAt: string }) => 
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+
       return c.json({
         success: true,
-        data: documents,
+        data: filteredDocuments,
       });
     } catch (error) {
+      console.error("Fetch documents error:", error);
       return c.json(
         {
           success: false,
           message: "Failed to fetch documents",
-          error: error,
+          error: String(error),
         },
         500
       );
@@ -379,30 +404,47 @@ const documentRoute = new Hono()
       try {
         const user = c.get("user");
         const { documentId } = c.req.valid("param");
+        const userId = user.id;
 
-        const userId = user?.id;
-        const documentData = await db.query.documentTable.findFirst({
-          where: and(
-            eq(documentTable.userId, userId),
-            eq(documentTable.documentId, documentId)
-          ),
-          with: {
-            personalInfo: true,
-            experiences: true,
-            educations: true,
-            skills: true,
-          },
-        });
+        // Get all data from storage
+        const documents = getStorage('documents') || [];
+        const personalInfoItems = getStorage('personalInfo') || [];
+        const experienceItems = getStorage('experience') || [];
+        const educationItems = getStorage('education') || [];
+        const skillsItems = getStorage('skills') || [];
+
+        // Find the document
+        const document = documents.find(
+          (doc: { documentId: string; userId: string; }) => doc.documentId === documentId && doc.userId === userId
+        );
+
+        if (!document) {
+          return c.json({ error: "Document not found" }, 404);
+        }
+
+        // Get related data
+        const personalInfo = personalInfoItems.find((info: { docId: any; }) => info.docId === document.id);
+        const experiences = experienceItems.filter((exp: { docId: any; }) => exp.docId === document.id);
+        const educations = educationItems.filter((edu: { docId: any; }) => edu.docId === document.id);
+        const skills = skillsItems.filter((skill: { docId: any; }) => skill.docId === document.id);
+
         return c.json({
           success: true,
-          data: documentData,
+          data: {
+            ...document,
+            personalInfo,
+            experiences,
+            educations,
+            skills
+          },
         });
       } catch (error) {
+        console.error("Fetch document error:", error);
         return c.json(
           {
             success: false,
-            message: "Failed to fetch documents",
-            error: error,
+            message: "Failed to fetch document",
+            error: String(error),
           },
           500
         );
@@ -410,7 +452,7 @@ const documentRoute = new Hono()
     }
   )
   .get(
-    "public/doc/:documentId",
+    "/public/doc/:documentId",
     zValidator(
       "param",
       z.object({
@@ -420,20 +462,20 @@ const documentRoute = new Hono()
     async (c) => {
       try {
         const { documentId } = c.req.valid("param");
-        const documentData = await db.query.documentTable.findFirst({
-          where: and(
-            eq(documentTable.status, "public"),
-            eq(documentTable.documentId, documentId)
-          ),
-          with: {
-            personalInfo: true,
-            experiences: true,
-            educations: true,
-            skills: true,
-          },
-        });
+        
+        // Get all data from storage
+        const documents = getStorage('documents') || [];
+        const personalInfoItems = getStorage('personalInfo') || [];
+        const experienceItems = getStorage('experience') || [];
+        const educationItems = getStorage('education') || [];
+        const skillsItems = getStorage('skills') || [];
 
-        if (!documentData) {
+        // Find the document that is public
+        const document = documents.find(
+          (doc: { documentId: string; status: string; }) => doc.documentId === documentId && doc.status === "public"
+        );
+
+        if (!document) {
           return c.json(
             {
               error: true,
@@ -442,16 +484,30 @@ const documentRoute = new Hono()
             401
           );
         }
+
+        // Get related data
+        const personalInfo = personalInfoItems.find((info: { docId: any; }) => info.docId === document.id);
+        const experiences = experienceItems.filter((exp: { docId: any; }) => exp.docId === document.id);
+        const educations = educationItems.filter((edu: { docId: any; }) => edu.docId === document.id);
+        const skills = skillsItems.filter((skill: { docId: any; }) => skill.docId === document.id);
+
         return c.json({
           success: true,
-          data: documentData,
+          data: {
+            ...document,
+            personalInfo,
+            experiences,
+            educations,
+            skills
+          },
         });
       } catch (error) {
+        console.error("Fetch public document error:", error);
         return c.json(
           {
             success: false,
             message: "Failed to fetch document",
-            error: error,
+            error: String(error),
           },
           500
         );
@@ -462,25 +518,26 @@ const documentRoute = new Hono()
     try {
       const user = c.get("user");
       const userId = user.id;
-      const documents = await db
-        .select()
-        .from(documentTable)
-        .where(
-          and(
-            eq(documentTable.userId, userId),
-            eq(documentTable.status, "archived")
-          )
-        );
+      
+      // Get documents from storage
+      const documents = getStorage('documents') || [];
+      
+      // Filter archived documents
+      const archivedDocuments = documents.filter(
+        (doc: { userId: string; status: string; }) => doc.userId === userId && doc.status === "archived"
+      );
+
       return c.json({
         success: true,
-        data: documents,
+        data: archivedDocuments,
       });
     } catch (error) {
+      console.error("Fetch trash documents error:", error);
       return c.json(
         {
           success: false,
           message: "Failed to fetch documents",
-          error: error,
+          error: String(error),
         },
         500
       );

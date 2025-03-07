@@ -11,8 +11,10 @@ import { generateThumbnail } from "@/lib/helper";
 import { toast } from "@/hooks/use-toast";
 
 const initialState = {
-  name: "",
-  rating: 0,
+  name: "", // Keep this for UI purposes
+  rating: 0, // Keep this for UI purposes
+  experienceLevel: "", // Add this to match your rendering component
+  summary: "" // Add this to match your rendering component
 };
 
 const SkillsForm = () => {
